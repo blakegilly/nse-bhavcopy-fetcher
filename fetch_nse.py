@@ -24,14 +24,11 @@ month_str = today.strftime("%Y/%b").upper()
 
 url = f"https://archives.nseindia.com/content/historical/EQUITIES/{month_str}/cm{date_str}bhav.csv.zip"
 
-headers = {
-    "User-Agent": "Mozilla/5.0"
-}
+headers = {"User-Agent": "Mozilla/5.0"}
 
 print("Fetching:", url)
 
 response = requests.get(url, headers=headers)
-
 print("HTTP Status:", response.status_code)
 
 if response.status_code != 200:
@@ -52,34 +49,52 @@ df = pd.read_csv(zf.open(file_name))
 df.columns = [c.strip().lower() for c in df.columns]
 
 # -----------------------------
-# ADD & NORMALIZE DATE
-# IMPORTANT FIX (removes hidden duplicates)
+# NORMALIZE DATA (CRITICAL FIX)
 # -----------------------------
+df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
+
 df["trade_date"] = today.date().isoformat()
 
 # -----------------------------
 # SELECT ONLY REQUIRED FIELDS
 # -----------------------------
-df = df[[
-    "symbol",
-    "series",
-    "open",
-    "high",
-    "low",
-    "close",
-    "last",
-    "prevclose",
-    "tottrdqty",
-    "tottrdval",
-    "trade_date"
-]]
+df = df[
+    [
+        "symbol",
+        "series",
+        "open",
+        "high",
+        "low",
+        "close",
+        "last",
+        "prevclose",
+        "tottrdqty",
+        "tottrdval",
+        "trade_date",
+    ]
+]
 
 # -----------------------------
-# REMOVE DUPLICATES (CRITICAL FIX)
+# FORCE CLEAN TYPES (IMPORTANT)
 # -----------------------------
-df = df.drop_duplicates(subset=["symbol", "trade_date"])
+df = df.fillna(0)
+
+# -----------------------------
+# HARD DEDUPLICATION (CRITICAL FIX)
+# -----------------------------
+df = df.sort_values(["symbol", "trade_date"])
+df = df.drop_duplicates(subset=["symbol", "trade_date"], keep="last")
 
 print("Final rows to insert:", len(df))
+
+# -----------------------------
+# FINAL SAFETY CHECK (VERY IMPORTANT)
+# -----------------------------
+dupes = df[df.duplicated(["symbol", "trade_date"], keep=False)]
+
+if len(dupes) > 0:
+    print("❌ Still duplicates found, fixing again...")
+    df = df.drop_duplicates(["symbol", "trade_date"], keep="last")
 
 # -----------------------------
 # CONVERT TO RECORDS
@@ -91,7 +106,8 @@ records = df.to_dict(orient="records")
 # -----------------------------
 response = supabase.table("stocks_eod").upsert(
     records,
-    on_conflict="symbol,trade_date"
+    on_conflict="symbol,trade_date",
+    ignore_duplicates=False
 ).execute()
 
 print("Insert complete")
