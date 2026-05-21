@@ -1,80 +1,95 @@
+import os
 import requests
-import zipfile
-import io
 import pandas as pd
 from datetime import datetime
-from supabase import create_client
-import os
-import time
+from supabase import create_client, Client
 
+# -----------------------------
+# ENV VARIABLES (GitHub Secrets)
+# -----------------------------
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-today = datetime.now().strftime("%Y%m%d")
+# -----------------------------
+# NSE BHAVCOPY DOWNLOAD LOGIC
+# -----------------------------
+today = datetime.now().strftime("%d%m%Y")
 
-url = f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{today}_F_0000.csv.zip"
+url = f"https://archives.nseindia.com/content/historical/EQUITIES/{datetime.now().strftime('%Y/%b').upper()}/cm{today}bhav.csv.zip"
 
 headers = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.nseindia.com/",
-    "Accept": "*/*",
-    "Connection": "keep-alive"
+    "User-Agent": "Mozilla/5.0"
 }
 
-session = requests.Session()
+print(f"Fetching: {url}")
 
-# NSE often requires homepage hit first
-session.get("https://www.nseindia.com", headers=headers, timeout=10)
+response = requests.get(url, headers=headers)
 
-time.sleep(2)
+print(f"HTTP Status: {response.status_code}")
 
-response = session.get(url, headers=headers, timeout=30)
-
-print("HTTP Status:", response.status_code)
-
+# If file not available yet
 if response.status_code != 200:
     print("Bhavcopy not available yet")
-    exit()
+    exit(0)
 
-z = zipfile.ZipFile(io.BytesIO(response.content))
+# -----------------------------
+# READ CSV FROM ZIP
+# -----------------------------
+from io import BytesIO
+import zipfile
 
-csv_file = z.namelist()[0]
+zf = zipfile.ZipFile(BytesIO(response.content))
+file_name = zf.namelist()[0]
 
-with z.open(csv_file) as f:
-    df = pd.read_csv(f)
+df = pd.read_csv(zf.open(file_name))
 
-symbol_col = "TckrSymb" if "TckrSymb" in df.columns else "SYMBOL"
-open_col = "OpnPric" if "OpnPric" in df.columns else "OPEN"
-high_col = "HghPric" if "HghPric" in df.columns else "HIGH"
-low_col = "LwPric" if "LwPric" in df.columns else "LOW"
-close_col = "ClsPric" if "ClsPric" in df.columns else "CLOSE"
-volume_col = "TtlTradgVol" if "TtlTradgVol" in df.columns else "TOTTRDQTY"
+# -----------------------------
+# CLEAN / TRANSFORM DATA
+# -----------------------------
+df.columns = [c.strip().lower() for c in df.columns]
 
-trade_date = datetime.now().strftime("%Y-%m-%d")
+records = df.to_dict(orient="records")
 
-records = []
+# Normalize keys if needed
+cleaned_records = []
+for r in records:
+    cleaned_records.append({
+        "symbol": r.get("symbol"),
+        "series": r.get("series"),
+        "open": r.get("open"),
+        "high": r.get("high"),
+        "low": r.get("low"),
+        "close": r.get("close"),
+        "last": r.get("last"),
+        "prevclose": r.get("prevclose"),
+        "tottrdqty": r.get("tottrdqty"),
+        "tottrdval": r.get("tottrdval"),
+        "trade_date": datetime.now().date().isoformat()
+    })
 
-for _, row in df.iterrows():
+# -----------------------------
+# REMOVE DUPLICATES (IMPORTANT FIX)
+# -----------------------------
+seen = set()
+unique_records = []
 
-    try:
-        records.append({
-            "symbol": str(row[symbol_col]),
-            "trade_date": trade_date,
-            "open": float(row[open_col]),
-            "high": float(row[high_col]),
-            "low": float(row[low_col]),
-            "close": float(row[close_col]),
-            "volume": int(row[volume_col])
-        })
+for r in cleaned_records:
+    key = (r["symbol"], r["trade_date"])
+    if key not in seen:
+        seen.add(key)
+        unique_records.append(r)
 
-    except Exception as e:
-        print("Skipping row:", e)
+print("Total records:", len(cleaned_records))
+print("Unique records:", len(unique_records))
 
-if records:
-    response = supabase.table("stocks_eod").upsert(records).execute()
-    print("Inserted rows:", len(records))
-else:
-    print("No valid records found")
+# -----------------------------
+# UPSERT TO SUPABASE
+# -----------------------------
+response = supabase.table("stocks_eod").upsert(
+    unique_records,
+    on_conflict="symbol,trade_date"
+).execute()
+
+print("Insert complete:", response)
