@@ -1,6 +1,3 @@
-Replace your entire `fetch_nse.py` with this fully fixed version:
-
-```python
 import os
 import requests
 import pandas as pd
