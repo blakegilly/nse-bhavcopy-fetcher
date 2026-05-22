@@ -1,9 +1,10 @@
 import os
+import time
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
 from io import BytesIO
 import zipfile
+from datetime import datetime, timedelta
 from supabase import create_client
 
 print("STARTING SCRIPT")
@@ -23,66 +24,77 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 print("Supabase client created")
 
+
 # -----------------------------
-# NSE DATE (MINIMAL FIX)
+# NSE FETCH (WITH RETRY)
 # -----------------------------
-today = datetime.now()
+def fetch_bhavcopy(max_lookback_days=5):
+    base_headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "*/*",
+        "Referer": "https://www.nseindia.com/",
+    }
 
-# keep your original logic (safe + predictable)
-if today.weekday() == 0:
-    trade_day = today - timedelta(days=3)
-else:
-    trade_day = today - timedelta(days=1)
+    today = datetime.now()
 
-date_str = trade_day.strftime("%Y%m%d")
+    for i in range(max_lookback_days):
+        trade_day = today - timedelta(days=i + 1)
+        date_str = trade_day.strftime("%Y%m%d")
 
-url = f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{date_str}_F_0000.csv.zip"
+        url = f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{date_str}_F_0000.csv.zip"
 
-headers = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "*/*",
-    "Referer": "https://www.nseindia.com/",
-}
+        print("Trying:", url)
 
-print("Fetching:", url)
+        try:
+            r = requests.get(url, headers=base_headers, timeout=20)
 
-response = requests.get(url, headers=headers, timeout=30)
+            if r.status_code != 200:
+                continue
 
-print("HTTP Status:", response.status_code)
-print("Content-Type:", response.headers.get("Content-Type"))
+            if "zip" not in r.headers.get("Content-Type", ""):
+                continue
 
-if response.status_code != 200:
-    print("Bhavcopy not available")
-    exit(0)
+            print("SUCCESS FOUND FILE FOR:", date_str)
+            return trade_day, r.content
 
-if "zip" not in response.headers.get("Content-Type", ""):
-    print("Did not receive ZIP")
-    print(response.text[:500])
-    exit(1)
+        except Exception as e:
+            print("Error for date", date_str, "->", str(e))
+            continue
+
+    raise Exception("No bhavcopy found in last N days")
+
+
+trade_day, content = fetch_bhavcopy()
+
 
 # -----------------------------
 # READ ZIP
 # -----------------------------
-zf = zipfile.ZipFile(BytesIO(response.content))
-
-print("ZIP files:", zf.namelist())
-
+zf = zipfile.ZipFile(BytesIO(content))
 file_name = zf.namelist()[0]
+
 df = pd.read_csv(zf.open(file_name))
 
 print("CSV Loaded")
 print("Rows:", len(df))
 
 # -----------------------------
-# CLEAN
+# CLEAN COLUMN NAMES
 # -----------------------------
 df.columns = [c.strip().lower() for c in df.columns]
 
-print("Columns:")
-print(df.columns.tolist())
+print("Columns:", df.columns.tolist())
 
+
+# -----------------------------
+# FILTER EQ ONLY
+# -----------------------------
 df = df[df["sctysrs"] == "EQ"]
 
+
+# -----------------------------
+# RENAME TO DB FORMAT
+# -----------------------------
 df = df.rename(columns={
     "tckrsymb": "symbol",
     "sctysrs": "series",
@@ -93,19 +105,25 @@ df = df.rename(columns={
     "lastpric": "last",
     "prvsclsgpric": "prevclose",
     "ttltradgvol": "tottrdqty",
-    "ttltrfval": "tottrdval"
+    "ttltrfval": "tottrdval",
+    "bizdt": "trade_date"
 })
 
+
+# -----------------------------
+# CLEAN SYMBOL
+# -----------------------------
 df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
 
-# -----------------------------
-# 🔥 FIX (CRITICAL)
-# NO python date objects anywhere
-# -----------------------------
-df["trade_date"] = trade_day.strftime("%Y-%m-%d")
 
 # -----------------------------
-# SELECT
+# USE NSE DATE (IMPORTANT FIX)
+# -----------------------------
+df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+
+
+# -----------------------------
+# SELECT FINAL COLUMNS
 # -----------------------------
 df = df[
     [
@@ -123,43 +141,49 @@ df = df[
     ]
 ]
 
+
 # -----------------------------
 # CLEAN NULLS
 # -----------------------------
 df = df.where(pd.notnull(df), None)
 
-df = df.drop_duplicates(
-    subset=["symbol", "trade_date"],
-    keep="last"
-)
+
+# -----------------------------
+# DEDUPE
+# -----------------------------
+df = df.drop_duplicates(subset=["symbol", "trade_date"], keep="last")
 
 print("Final rows:", len(df))
 
-print("Sample dataframe:")
-print(df.head())
 
 # -----------------------------
-# RECORDS
+# SUPABASE SAFE SERIALIZATION FIX
 # -----------------------------
 records = df.to_dict(orient="records")
 
-print("Sample record:")
-print(records[0])
+# convert python date -> string (CRITICAL FIX)
+for r in records:
+    if r.get("trade_date"):
+        r["trade_date"] = r["trade_date"].isoformat()
+
+
+print("Sample record:", records[0])
+
 
 # -----------------------------
 # UPSERT
 # -----------------------------
 try:
-    print("Attempting insert...")
+    print("Uploading to Supabase...")
 
     result = supabase.table("stocks_eod").upsert(
         records,
         on_conflict="symbol,trade_date"
     ).execute()
 
-    print("INSERT SUCCESS")
-    print(result)
+    print("SUCCESS")
+    print("Inserted rows:", len(records))
 
 except Exception as e:
-    print("INSERT FAILED")
+    print("FAILED INSERT")
     print(str(e))
