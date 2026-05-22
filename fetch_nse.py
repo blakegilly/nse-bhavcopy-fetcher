@@ -104,10 +104,16 @@ records = df.to_dict(orient="records")
 # -----------------------------
 # UPSERT TO SUPABASE
 # -----------------------------
-response = supabase.table("stocks_eod").upsert(
-    records,
-    on_conflict="symbol,trade_date",
-    ignore_duplicates=False
-).execute()
+try:
+    response = supabase.table("stocks_eod").upsert(
+        records,
+        on_conflict="symbol,trade_date",
+        ignore_duplicates=False
+    ).execute()
 
-print("Insert complete")
+    print("Supabase response:")
+    print(response)
+
+except Exception as e:
+    print("SUPABASE ERROR:")
+    print(str(e))
