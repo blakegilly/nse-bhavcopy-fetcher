@@ -6,13 +6,23 @@ from io import BytesIO
 import zipfile
 from supabase import create_client
 
+print("STARTING SCRIPT")
+
 # -----------------------------
 # ENV
 # -----------------------------
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+print("SUPABASE_URL exists:", bool(SUPABASE_URL))
+print("SUPABASE_KEY exists:", bool(SUPABASE_KEY))
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise Exception("Missing Supabase credentials")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+print("Supabase client created")
 
 # -----------------------------
 # NSE URL
@@ -24,39 +34,61 @@ month_str = today.strftime("%Y/%b").upper()
 
 url = f"https://archives.nseindia.com/content/historical/EQUITIES/{month_str}/cm{date_str}bhav.csv.zip"
 
-headers = {"User-Agent": "Mozilla/5.0"}
+headers = {
+    "User-Agent": "Mozilla/5.0"
+}
 
 print("Fetching:", url)
 
-response = requests.get(url, headers=headers)
+response = requests.get(
+    url,
+    headers=headers,
+    timeout=30
+)
+
 print("HTTP Status:", response.status_code)
+print("Content-Type:", response.headers.get("Content-Type"))
 
 if response.status_code != 200:
-    print("Bhavcopy not available yet")
+    print("Bhavcopy not available")
     exit(0)
 
 # -----------------------------
-# READ ZIP CSV
+# VERIFY ZIP
+# -----------------------------
+if "zip" not in response.headers.get("Content-Type", ""):
+    print("Did not receive ZIP")
+    print(response.text[:500])
+    exit(1)
+
+# -----------------------------
+# READ ZIP
 # -----------------------------
 zf = zipfile.ZipFile(BytesIO(response.content))
+
+print("ZIP files:", zf.namelist())
+
 file_name = zf.namelist()[0]
 
 df = pd.read_csv(zf.open(file_name))
 
+print("CSV Loaded")
+print("Rows:", len(df))
+
 # -----------------------------
-# CLEAN COLUMN NAMES
+# CLEAN
 # -----------------------------
 df.columns = [c.strip().lower() for c in df.columns]
 
-# -----------------------------
-# NORMALIZE DATA (CRITICAL FIX)
-# -----------------------------
+print("Columns:")
+print(df.columns.tolist())
+
 df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
 
 df["trade_date"] = today.date().isoformat()
 
 # -----------------------------
-# SELECT ONLY REQUIRED FIELDS
+# SELECT
 # -----------------------------
 df = df[
     [
@@ -75,45 +107,42 @@ df = df[
 ]
 
 # -----------------------------
-# FORCE CLEAN TYPES (IMPORTANT)
+# FIX NaN
 # -----------------------------
-df = df.fillna(0)
+df = df.where(pd.notnull(df), None)
 
 # -----------------------------
-# HARD DEDUPLICATION (CRITICAL FIX)
+# DEDUPE
 # -----------------------------
-df = df.sort_values(["symbol", "trade_date"])
-df = df.drop_duplicates(subset=["symbol", "trade_date"], keep="last")
+df = df.drop_duplicates(
+    subset=["symbol", "trade_date"],
+    keep="last"
+)
 
-print("Final rows to insert:", len(df))
-
-# -----------------------------
-# FINAL SAFETY CHECK (VERY IMPORTANT)
-# -----------------------------
-dupes = df[df.duplicated(["symbol", "trade_date"], keep=False)]
-
-if len(dupes) > 0:
-    print("❌ Still duplicates found, fixing again...")
-    df = df.drop_duplicates(["symbol", "trade_date"], keep="last")
+print("Final rows:", len(df))
 
 # -----------------------------
-# CONVERT TO RECORDS
+# RECORDS
 # -----------------------------
 records = df.to_dict(orient="records")
 
+print("Sample record:")
+print(records[0])
+
 # -----------------------------
-# UPSERT TO SUPABASE
+# TEST INSERT
 # -----------------------------
 try:
-    response = supabase.table("stocks_eod").upsert(
-        records,
-        on_conflict="symbol,trade_date",
-        ignore_duplicates=False
+    print("Attempting insert...")
+
+    result = supabase.table("stocks_eod").upsert(
+        records[:5],
+        on_conflict="symbol,trade_date"
     ).execute()
 
-    print("Supabase response:")
-    print(response)
+    print("INSERT SUCCESS")
+    print(result)
 
 except Exception as e:
-    print("SUPABASE ERROR:")
+    print("INSERT FAILED")
     print(str(e))
