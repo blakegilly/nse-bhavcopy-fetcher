@@ -179,4 +179,3 @@ try:
 except Exception as e:
     print("INSERT FAILED")
     print(str(e))
-```
