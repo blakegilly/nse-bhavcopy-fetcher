@@ -41,9 +41,10 @@ date_str = trade_day.strftime("%Y%m%d")
 url = f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{date_str}_F_0000.csv.zip"
 
 headers = {
-    "User-Agent": "Mozilla/5.0"
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "*/*",
+    "Referer": "https://www.nseindia.com/",
 }
-
 print("Fetching:", url)
 
 response = requests.get(
