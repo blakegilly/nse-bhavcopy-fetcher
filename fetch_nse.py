@@ -27,12 +27,18 @@ print("Supabase client created")
 # -----------------------------
 # NSE URL
 # -----------------------------
-today = datetime.now() - timedelta(days=1)
 
-date_str = today.strftime("%d%m%Y")
-month_str = today.strftime("%Y/%b").upper()
+today = datetime.now()
 
-url = f"https://archives.nseindia.com/content/historical/EQUITIES/{month_str}/cm{date_str}bhav.csv.zip"
+# previous trading day
+if today.weekday() == 0:
+    trade_day = today - timedelta(days=3)
+else:
+    trade_day = today - timedelta(days=1)
+
+date_str = trade_day.strftime("%Y%m%d")
+
+url = f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{date_str}_F_0000.csv.zip"
 
 headers = {
     "User-Agent": "Mozilla/5.0"
