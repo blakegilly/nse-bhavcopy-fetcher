@@ -36,18 +36,27 @@ def get_latest_trade_file(max_lookback=7):
 
         url = f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{date_str}_F_0000.csv.zip"
 
-        r = requests.head(url, timeout=10)
+        try:
+            # IMPORTANT: use GET, not HEAD
+            r = requests.get(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "*/*"
+                },
+                stream=True,
+                timeout=25   # increased timeout
+            )
 
-        if r.status_code == 200:
-            return d, url
+            # If valid file exists
+            if r.status_code == 200 and "zip" in r.headers.get("Content-Type", ""):
+                return d, url
+
+        except requests.exceptions.RequestException:
+            # ignore and try previous day
+            continue
 
     raise Exception("No NSE bhavcopy found in last 7 days")
-
-
-trade_day, url = get_latest_trade_file()
-
-print("Using trade day:", trade_day.strftime("%Y-%m-%d"))
-print("Fetching:", url)
 
 
 # -----------------------------
