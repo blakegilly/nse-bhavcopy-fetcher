@@ -1,3 +1,6 @@
+Replace your entire `fetch_nse.py` with this fully fixed version:
+
+```python
 import os
 import requests
 import pandas as pd
@@ -27,10 +30,9 @@ print("Supabase client created")
 # -----------------------------
 # NSE URL
 # -----------------------------
-
 today = datetime.now()
 
-# previous trading day
+# Previous trading day
 if today.weekday() == 0:
     trade_day = today - timedelta(days=3)
 else:
@@ -45,6 +47,7 @@ headers = {
     "Accept": "*/*",
     "Referer": "https://www.nseindia.com/",
 }
+
 print("Fetching:", url)
 
 response = requests.get(
@@ -90,9 +93,32 @@ df.columns = [c.strip().lower() for c in df.columns]
 print("Columns:")
 print(df.columns.tolist())
 
+# Keep only EQ series
+df = df[df["sctysrs"] == "EQ"]
+
+# Rename NSE columns to match DB columns
+df = df.rename(columns={
+    "tckrsymb": "symbol",
+    "bizdt": "trade_date",
+    "sctysrs": "series",
+    "opnpric": "open",
+    "hghpric": "high",
+    "lwpric": "low",
+    "clspric": "close",
+    "lastpric": "last",
+    "prvsclsgpric": "prevclose",
+    "ttltradgvol": "tottrdqty",
+    "ttltrfval": "tottrdval"
+})
+
+# Clean symbol
 df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
 
-df["trade_date"] = today.date().isoformat()
+# Convert trade date
+df["trade_date"] = pd.to_datetime(
+    df["trade_date"],
+    errors="coerce"
+).dt.date
 
 # -----------------------------
 # SELECT
@@ -100,6 +126,7 @@ df["trade_date"] = today.date().isoformat()
 df = df[
     [
         "symbol",
+        "trade_date",
         "series",
         "open",
         "high",
@@ -109,7 +136,6 @@ df = df[
         "prevclose",
         "tottrdqty",
         "tottrdval",
-        "trade_date",
     ]
 ]
 
@@ -128,6 +154,9 @@ df = df.drop_duplicates(
 
 print("Final rows:", len(df))
 
+print("Sample dataframe:")
+print(df.head())
+
 # -----------------------------
 # RECORDS
 # -----------------------------
@@ -137,13 +166,13 @@ print("Sample record:")
 print(records[0])
 
 # -----------------------------
-# TEST INSERT
+# UPSERT
 # -----------------------------
 try:
     print("Attempting insert...")
 
     result = supabase.table("stocks_eod").upsert(
-        records[:5],
+        records,
         on_conflict="symbol,trade_date"
     ).execute()
 
@@ -153,3 +182,4 @@ try:
 except Exception as e:
     print("INSERT FAILED")
     print(str(e))
+```
