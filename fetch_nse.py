@@ -112,10 +112,8 @@ df = df.rename(columns={
 df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
 
 # Convert trade date
-df["trade_date"] = pd.to_datetime(
-    df["trade_date"],
-    errors="coerce"
-).dt.date
+trade_date_str = trade_day.strftime("%Y-%m-%d")
+df["trade_date"] = trade_date_str
 
 # -----------------------------
 # SELECT
