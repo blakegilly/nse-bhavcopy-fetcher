@@ -23,50 +23,28 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 print("Supabase client created")
 
-
 # -----------------------------
-# FIND LATEST NSE FILE (ROBUST)
+# NSE DATE (MINIMAL FIX)
 # -----------------------------
-def get_latest_trade_file(max_lookback=7):
-    base = datetime.now()
+today = datetime.now()
 
-    for i in range(1, max_lookback + 1):
-        d = base - timedelta(days=i)
-        date_str = d.strftime("%Y%m%d")
+# keep your original logic (safe + predictable)
+if today.weekday() == 0:
+    trade_day = today - timedelta(days=3)
+else:
+    trade_day = today - timedelta(days=1)
 
-        url = f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{date_str}_F_0000.csv.zip"
+date_str = trade_day.strftime("%Y%m%d")
 
-        try:
-            # IMPORTANT: use GET, not HEAD
-            r = requests.get(
-                url,
-                headers={
-                    "User-Agent": "Mozilla/5.0",
-                    "Accept": "*/*"
-                },
-                stream=True,
-                timeout=25   # increased timeout
-            )
+url = f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{date_str}_F_0000.csv.zip"
 
-            # If valid file exists
-            if r.status_code == 200 and "zip" in r.headers.get("Content-Type", ""):
-                return d, url
-
-        except requests.exceptions.RequestException:
-            # ignore and try previous day
-            continue
-
-    raise Exception("No NSE bhavcopy found in last 7 days")
-
-
-# -----------------------------
-# DOWNLOAD FILE
-# -----------------------------
 headers = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "*/*",
     "Referer": "https://www.nseindia.com/",
 }
+
+print("Fetching:", url)
 
 response = requests.get(url, headers=headers, timeout=30)
 
@@ -82,11 +60,11 @@ if "zip" not in response.headers.get("Content-Type", ""):
     print(response.text[:500])
     exit(1)
 
-
 # -----------------------------
 # READ ZIP
 # -----------------------------
 zf = zipfile.ZipFile(BytesIO(response.content))
+
 print("ZIP files:", zf.namelist())
 
 file_name = zf.namelist()[0]
@@ -95,11 +73,13 @@ df = pd.read_csv(zf.open(file_name))
 print("CSV Loaded")
 print("Rows:", len(df))
 
-
 # -----------------------------
-# CLEAN + MAP COLUMNS
+# CLEAN
 # -----------------------------
 df.columns = [c.strip().lower() for c in df.columns]
+
+print("Columns:")
+print(df.columns.tolist())
 
 df = df[df["sctysrs"] == "EQ"]
 
@@ -116,15 +96,16 @@ df = df.rename(columns={
     "ttltrfval": "tottrdval"
 })
 
-# Safe symbol cleaning
 df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
 
-# IMPORTANT: store as STRING (Supabase safe)
+# -----------------------------
+# 🔥 FIX (CRITICAL)
+# NO python date objects anywhere
+# -----------------------------
 df["trade_date"] = trade_day.strftime("%Y-%m-%d")
 
-
 # -----------------------------
-# FINAL SELECTION
+# SELECT
 # -----------------------------
 df = df[
     [
@@ -142,9 +123,8 @@ df = df[
     ]
 ]
 
-
 # -----------------------------
-# NULL SAFETY
+# CLEAN NULLS
 # -----------------------------
 df = df.where(pd.notnull(df), None)
 
@@ -154,19 +134,20 @@ df = df.drop_duplicates(
 )
 
 print("Final rows:", len(df))
+
+print("Sample dataframe:")
 print(df.head())
 
-
 # -----------------------------
-# RECORDS (JSON SAFE)
+# RECORDS
 # -----------------------------
 records = df.to_dict(orient="records")
 
-print("Sample record:", records[0])
-
+print("Sample record:")
+print(records[0])
 
 # -----------------------------
-# UPSERT TO SUPABASE
+# UPSERT
 # -----------------------------
 try:
     print("Attempting insert...")
