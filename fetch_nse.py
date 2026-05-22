@@ -1,7 +1,7 @@
 import os
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 import zipfile
 from supabase import create_client
@@ -27,7 +27,7 @@ print("Supabase client created")
 # -----------------------------
 # NSE URL
 # -----------------------------
-today = datetime.now()
+today = datetime.now() - timedelta(days=1)
 
 date_str = today.strftime("%d%m%Y")
 month_str = today.strftime("%Y/%b").upper()
